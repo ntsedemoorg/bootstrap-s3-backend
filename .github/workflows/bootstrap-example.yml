@@ -1,0 +1,82 @@
+name: Bootstrap Terraform Backend
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  terraform:
+    runs-on: ubuntu-latest
+
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      AWS_REGION: "eu-west-1"
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Check if already using state
+      working-directory: ./examples/full
+      id: check_state_bucket
+      run: |
+        account_id=$(aws sts get-caller-identity --query Account --output text)
+        s3_bucket_name=${account_id}-${AWS_REGION}-state
+        retVal=0
+        aws s3api head-object --bucket ${s3_bucket_name} --key s3-backend-state/terraform.tfstate || retVal=$? && true
+        if [[ $retVal == 0 ]]; then
+           echo "s3_bucket_exists=true" >> $GITHUB_OUTPUT
+        else
+          echo  "s3_bucket_exists=false" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Setup Terraform
+      if: steps.check_state_bucket.outputs.s3_bucket_exists == 'false'
+      uses: hashicorp/setup-terraform@v3
+
+    - name: Disable S3 Backend
+      working-directory: ./examples/full
+      if: steps.check_state_bucket.outputs.s3_bucket_exists == 'false'
+      run: mv terraform.tf terraform.tf.orig
+
+    - name: Initialize Terraform
+      working-directory: ./examples/full
+      if: steps.check_state_bucket.outputs.s3_bucket_exists == 'false'
+      run: terraform init -reconfigure -input=false
+
+    - name: Validate Terraform
+      working-directory: ./examples/full
+      if: steps.check_state_bucket.outputs.s3_bucket_exists == 'false'
+      run: terraform validate -no-color
+
+    - name: Plan Terraform
+      working-directory: ./examples/full
+      if: steps.check_state_bucket.outputs.s3_bucket_exists == 'false'
+      run: terraform plan -out=tfplan -no-color -input=false
+
+    - name: Apply Terraform
+      working-directory: ./examples/full
+      if: steps.check_state_bucket.outputs.s3_bucket_exists == 'false'
+      run: terraform apply -auto-approve -input=false tfplan
+
+    - name: Initialize Terraform with S3 Backend
+      working-directory: ./examples/full
+      if: steps.check_state_bucket.outputs.s3_bucket_exists == 'false'
+      run: |
+        sudo apt-get -y install jq
+        dynamodb_table=$(terraform output -json | jq -r .dynamodb_table_name.value)
+        s3_state_bucket=$(terraform output -json | jq -r .aws_s3_bucket.value)
+        mv terraform.tf.orig terraform.tf
+        terraform init -backend-config=dynamodb_table=$dynamodb_table -backend-config=bucket=$s3_state_bucket -backend-config=key=s3-backend-state/terraform.tfstate -force-copy -input=false
+
+    - name: Plan Terraform with S3 Backend
+      working-directory: ./examples/full
+      if: steps.check_state_bucket.outputs.s3_bucket_exists == 'false'
+      run: terraform plan -out=tfplan -no-color -input=false
+
+    - name: Apply Terraform with S3 Backend
+      working-directory: ./examples/full
+      if: steps.check_state_bucket.outputs.s3_bucket_exists == 'false'
+      run: terraform apply -auto-approve -input=false tfplan    

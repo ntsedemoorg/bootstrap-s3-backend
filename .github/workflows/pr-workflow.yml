@@ -1,0 +1,46 @@
+name: PR Workflow
+
+on:
+  pull_request:
+    branches:
+      - 'main'
+
+jobs:
+  terraform:
+    runs-on: ubuntu-latest
+
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      AWS_REGION: "eu-west-1"
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v3
+
+    - name: Run Terraform fmt     
+      run: terraform fmt --recursive --check
+      id: terraform_fmt
+      continue-on-error: true
+      
+    - name: Setup TFLint
+      uses: terraform-linters/setup-tflint@v4
+
+    - name: Run TFLint
+      run: tflint --recursive
+      id: terraform_lint
+      continue-on-error: true
+
+    - name: Generate summary of linting
+      run: |
+        terraform_fmt_status="❌"
+        terraform_lint_status="❌"
+        [ ${{ steps.terraform_fmt.outcome }} == 'success' ] && terraform_fmt_status="✅"
+        [ ${{ steps.terraform_lint.outcome }} == 'success' ] && terraform_lint_status="✅"
+        echo "Terraform Linting" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "- Terraform Formating ${terraform_fmt_status}" >> $GITHUB_STEP_SUMMARY
+        echo "- Terraform Linting ${terraform_lint_status}" >> $GITHUB_STEP_SUMMARY
